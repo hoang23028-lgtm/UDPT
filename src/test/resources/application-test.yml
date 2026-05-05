@@ -2,6 +2,8 @@ app:
   jwt:
     secret: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     expiration-ms: 3600000
+  rate-limit:
+    enabled: false
 
 spring:
   autoconfigure:
