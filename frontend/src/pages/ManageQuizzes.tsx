@@ -15,10 +15,12 @@ export function ManageQuizzes() {
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const canManage = user?.role === 'ADMIN' || user?.role === 'TEACHER';
-  if (!user) return <Navigate to="/login" replace />;
-  if (!canManage) return <Navigate to="/" replace />;
 
   useEffect(() => {
+    if (!user || !canManage) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     void (async () => {
       setLoading(true);
@@ -47,12 +49,13 @@ export function ManageQuizzes() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [user, canManage]);
 
   const rows = useMemo(() => {
+    if (!user) return [];
     if (user.role === 'ADMIN') return items;
     return items.filter((q) => q.createdByUserId === user.id);
-  }, [items, user.id, user.role]);
+  }, [items, user]);
 
   async function deleteQuiz(id: string) {
     if (!confirm('Xóa đề thi này? (Chỉ xóa được khi chưa có bài nộp)')) return;
@@ -67,6 +70,9 @@ export function ManageQuizzes() {
       setBusyId(null);
     }
   }
+
+  if (!user) return <Navigate to="/login" replace />;
+  if (!canManage) return <Navigate to="/" replace />;
 
   return (
     <div>

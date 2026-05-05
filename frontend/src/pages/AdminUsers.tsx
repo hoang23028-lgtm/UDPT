@@ -25,8 +25,7 @@ export function AdminUsers() {
     role: 'STUDENT',
   });
 
-  if (!user) return <Navigate to="/login" replace />;
-  if (user.role !== 'ADMIN') return <Navigate to="/" replace />;
+  const isAdmin = user?.role === 'ADMIN';
 
   async function refresh() {
     setLoading(true);
@@ -42,8 +41,12 @@ export function AdminUsers() {
   }
 
   useEffect(() => {
+    if (!user || !isAdmin) {
+      setLoading(false);
+      return;
+    }
     void refresh();
-  }, []);
+  }, [user, isAdmin]);
 
   const rows = useMemo(() => items.slice(), [items]);
 
@@ -112,6 +115,9 @@ export function AdminUsers() {
       setBusyId(null);
     }
   }
+
+  if (!user) return <Navigate to="/login" replace />;
+  if (!isAdmin) return <Navigate to="/" replace />;
 
   return (
     <div>

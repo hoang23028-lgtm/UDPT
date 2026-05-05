@@ -35,10 +35,12 @@ export function EditQuiz() {
   const [loading, setLoading] = useState(true);
 
   const canManage = user?.role === 'ADMIN' || user?.role === 'TEACHER';
-  if (!user) return <Navigate to="/login" replace />;
-  if (!canManage) return <Navigate to="/" replace />;
 
   useEffect(() => {
+    if (!user || !canManage) {
+      setLoading(false);
+      return;
+    }
     if (!id) return;
     let cancelled = false;
     void (async () => {
@@ -74,7 +76,7 @@ export function EditQuiz() {
     return () => {
       cancelled = true;
     };
-  }, [id, user.id, user.role]);
+  }, [id, user, canManage]);
 
   const show = useMemo(() => quiz, [quiz]);
 
@@ -161,6 +163,9 @@ export function EditQuiz() {
       setBusy(false);
     }
   }
+
+  if (!user) return <Navigate to="/login" replace />;
+  if (!canManage) return <Navigate to="/" replace />;
 
   if (loading) return <div className="card">Đang tải…</div>;
   if (error && !show) return <div className="error-banner">{error}</div>;

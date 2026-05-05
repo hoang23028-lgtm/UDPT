@@ -52,6 +52,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })();
   }, [refreshMe]);
 
+  useEffect(() => {
+    const onAuthChanged = () => {
+      void refreshMe();
+    };
+    window.addEventListener('udpt:auth-changed', onAuthChanged);
+    window.addEventListener('storage', onAuthChanged);
+    return () => {
+      window.removeEventListener('udpt:auth-changed', onAuthChanged);
+      window.removeEventListener('storage', onAuthChanged);
+    };
+  }, [refreshMe]);
+
   const login = useCallback(
     async (email: string, password: string) => {
       const body = JSON.stringify({ email, password });

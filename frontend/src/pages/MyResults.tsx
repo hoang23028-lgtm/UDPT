@@ -11,9 +11,11 @@ export function MyResults() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  if (!user) return <Navigate to="/login" replace />;
-
   useEffect(() => {
+    if (!user) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     void (async () => {
       setLoading(true);
@@ -30,9 +32,11 @@ export function MyResults() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [user]);
 
   const rows = useMemo(() => items, [items]);
+
+  if (!user) return <Navigate to="/login" replace />;
 
   return (
     <div>

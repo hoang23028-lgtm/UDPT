@@ -94,3 +94,6 @@ Quy tắc:
 - **Redis**: `localhost:6379`
 
 
+ADMIN: admin@udpt.local / Passw0rd
+TEACHER: teacher@udpt.local / Passw0rd
+STUDENT: student@udpt.local / Passw0rd

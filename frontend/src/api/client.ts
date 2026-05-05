@@ -1,6 +1,7 @@
 import JSONbig from 'json-bigint';
 
 const TOKEN_KEY = 'udpt_token';
+const AUTH_EVENT = 'udpt:auth-changed';
 
 /** Parse API JSON without losing Cockroach-sized integer IDs (IEEE754). */
 const parseApiJson = JSONbig({ strict: false, storeAsString: true });
@@ -11,10 +12,12 @@ export function getToken(): string | null {
 
 export function setToken(token: string): void {
   localStorage.setItem(TOKEN_KEY, token);
+  window.dispatchEvent(new Event(AUTH_EVENT));
 }
 
 export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
+  window.dispatchEvent(new Event(AUTH_EVENT));
 }
 
 async function readErrorMessage(res: Response): Promise<string> {
@@ -37,6 +40,10 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   }
   const res = await fetch(path, { ...init, headers });
   if (!res.ok) {
+    // Token may be stale (switched accounts in another tab, expired, etc.)
+    if (res.status === 401) {
+      clearToken();
+    }
     throw new Error(await readErrorMessage(res));
   }
   if (res.status === 204) {
