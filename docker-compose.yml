@@ -168,6 +168,8 @@ services:
       SPRING_PROFILES_ACTIVE: docker
       # Run Flyway migrations from a single node to avoid distributed-lock contention.
       SPRING_FLYWAY_ENABLED: "true"
+      # Demo secret (MUST override for any real/public deployment)
+      APP_JWT_SECRET: "dev-demo-secret-please-change-32bytes-min"
     networks:
       - quiz-net
     depends_on:
@@ -191,6 +193,7 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: docker
       SPRING_FLYWAY_ENABLED: "false"
+      APP_JWT_SECRET: "dev-demo-secret-please-change-32bytes-min"
 
   app3:
     <<: *spring-app
@@ -198,6 +201,7 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: docker
       SPRING_FLYWAY_ENABLED: "false"
+      APP_JWT_SECRET: "dev-demo-secret-please-change-32bytes-min"
 
   nginx:
     image: nginx:1.25-alpine
