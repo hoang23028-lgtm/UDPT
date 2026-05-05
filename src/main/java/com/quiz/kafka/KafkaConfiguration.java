@@ -5,6 +5,7 @@ import com.quiz.event.QuizSubmittedMessage;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -21,6 +22,7 @@ import org.springframework.kafka.core.KafkaAdmin;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.support.serializer.JsonDeserializer;
 import org.springframework.kafka.support.serializer.JsonSerializer;
 import org.springframework.util.backoff.ExponentialBackOff;
@@ -34,6 +36,7 @@ import java.util.Map;
 public class KafkaConfiguration {
 
     public static final String TOPIC_QUIZ_SUBMITTED = "quiz.submitted";
+    public static final String TOPIC_QUIZ_SUBMITTED_DLT = TOPIC_QUIZ_SUBMITTED + ".DLT";
 
     @Bean
     public KafkaAdmin kafkaAdmin(KafkaProperties kafkaProperties) {
@@ -43,6 +46,11 @@ public class KafkaConfiguration {
     @Bean
     public NewTopic quizSubmittedTopic() {
         return new NewTopic(TOPIC_QUIZ_SUBMITTED, 3, (short) 1);
+    }
+
+    @Bean
+    public NewTopic quizSubmittedDltTopic() {
+        return new NewTopic(TOPIC_QUIZ_SUBMITTED_DLT, 3, (short) 1);
     }
 
     @Bean
@@ -83,7 +91,8 @@ public class KafkaConfiguration {
 
     @Bean
     public ConcurrentKafkaListenerContainerFactory<String, QuizSubmittedMessage> quizSubmittedListenerContainerFactory(
-            ConsumerFactory<String, QuizSubmittedMessage> consumerFactory
+            ConsumerFactory<String, QuizSubmittedMessage> consumerFactory,
+            KafkaTemplate<Object, Object> kafkaTemplate
     ) {
         ConcurrentKafkaListenerContainerFactory<String, QuizSubmittedMessage> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
@@ -93,7 +102,11 @@ public class KafkaConfiguration {
         backOff.setMultiplier(2.0);
         backOff.setMaxInterval(30_000L);
         backOff.setMaxElapsedTime(120_000L);
-        DefaultErrorHandler errorHandler = new DefaultErrorHandler(backOff);
+        DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(
+                kafkaTemplate,
+                (record, ex) -> new TopicPartition(TOPIC_QUIZ_SUBMITTED_DLT, record.partition())
+        );
+        DefaultErrorHandler errorHandler = new DefaultErrorHandler(recoverer, backOff);
         errorHandler.addNotRetryableExceptions(IllegalArgumentException.class, ClassCastException.class);
         factory.setCommonErrorHandler(errorHandler);
         return factory;
