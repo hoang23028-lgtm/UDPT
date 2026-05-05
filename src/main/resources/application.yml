@@ -43,35 +43,13 @@ spring:
 server:
   port: 8080
 
+# HS256 requires >= 256 bits (32 bytes). Override in production (env / secret manager).
 app:
   kafka:
     enabled: false
   jwt:
-    # MUST override via env/secret manager in real deployments.
-    secret: ${APP_JWT_SECRET:}
+    secret: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     expiration-ms: 86400000
-  rate-limit:
-    enabled: true
-    login:
-      window-seconds: 60
-      max-requests: 20
-    submit:
-      window-seconds: 30
-      max-requests: 30
-
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,metrics,prometheus
-  endpoint:
-    health:
-      probes:
-        enabled: true
-      show-details: when_authorized
-  metrics:
-    tags:
-      application: ${spring.application.name}
 
 logging:
   level:
