@@ -153,3 +153,157 @@ curl -sS http://localhost/nginx-health
 
 - Kiểm tra proxy trong `frontend/vite.config.ts` (mặc định proxy `/api` → `http://localhost`).
 
+## 7) Triển khai phân tán nhiều máy (public demo) – Cách B
+
+Mục tiêu: chạy đúng mô hình phân tán **nhiều máy**, public ra Internet qua **Nginx**, đồng thời **tách riêng**:
+
+- 3× CockroachDB node
+- 1× Redis
+- 1× Redpanda (Kafka)
+- 3× Spring Boot app node
+- 1× Nginx load balancer (public)
+
+### 7.1 Nguyên tắc an toàn khi demo public
+
+- **Chỉ public Nginx (80/443)**.
+- **Không public DB/Redis/Kafka** trực tiếp ra Internet.
+  - Tốt nhất: đặt các node trong **private network/VPC** và chỉ mở inbound từ app nodes.
+  - Nếu buộc phải dùng public IP: cấu hình firewall để **chỉ cho phép IP của các máy app** truy cập port nội bộ.
+- CockroachDB trong `docker-compose.yml` hiện chạy `--insecure`. Với demo public, hãy coi đây là **demo kỹ thuật**, không dùng cho production.
+
+### 7.2 Chuẩn bị hạ tầng (gợi ý tối thiểu)
+
+Bạn cần tối thiểu 9 VM (hoặc máy vật lý) có IP public:
+
+- `crdb-1`, `crdb-2`, `crdb-3` (CockroachDB)
+- `redis-1` (Redis)
+- `kafka-1` (Redpanda)
+- `app-1`, `app-2`, `app-3` (Spring Boot)
+- `nginx-1` (public entry)
+
+Tất cả máy cài:
+
+- Docker + Docker Compose v2
+
+### 7.3 Chạy CockroachDB cluster (3 máy)
+
+Trên từng máy `crdb-*`, chạy container CockroachDB và join vào cluster.
+
+Ví dụ trên `crdb-1` (thay `PUBLIC_IP_CRDB_1/2/3` bằng IP thật):
+
+```bash
+docker run -d --name crdb-1 --restart unless-stopped ^
+  -p 26257:26257 -p 8080:8080 ^
+  cockroachdb/cockroach:v23.2.5 start --insecure ^
+  --advertise-addr=PUBLIC_IP_CRDB_1:26257 ^
+  --http-addr=0.0.0.0:8080 ^
+  --listen-addr=0.0.0.0:26257 ^
+  --join=PUBLIC_IP_CRDB_1:26257,PUBLIC_IP_CRDB_2:26257,PUBLIC_IP_CRDB_3:26257
+```
+
+Tương tự cho `crdb-2`, `crdb-3` (đổi `--name` và `--advertise-addr`).
+
+Sau khi 3 node lên, tạo database logical `quizdb` (chạy 1 lần trên bất kỳ node):
+
+```bash
+docker exec -it crdb-1 cockroach sql --insecure --host=PUBLIC_IP_CRDB_1:26257 -e "CREATE DATABASE IF NOT EXISTS quizdb;"
+```
+
+### 7.4 Chạy Redis (1 máy)
+
+Trên `redis-1`:
+
+```bash
+docker run -d --name redis --restart unless-stopped ^
+  -p 6379:6379 ^
+  redis:7-alpine redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+```
+
+### 7.5 Chạy Redpanda/Kafka (1 máy)
+
+Trên `kafka-1`:
+
+```bash
+docker run -d --name redpanda --restart unless-stopped ^
+  -p 9092:9092 ^
+  docker.redpanda.com/redpandadata/redpanda:v23.3.18 ^
+  redpanda start --smp=1 --memory=512M --reserve-memory=0M --overprovisioned --node-id=0 --check=false ^
+  --kafka-addr=PLAINTEXT://0.0.0.0:9092 ^
+  --advertise-kafka-addr=PLAINTEXT://PUBLIC_IP_KAFKA_1:9092
+```
+
+### 7.6 Chạy 3 app nodes (3 máy)
+
+Trên mỗi máy `app-1/app-2/app-3`:
+
+1) Clone code:
+
+```bash
+git clone https://github.com/hoang23028-lgtm/UDPT.git
+cd UDPT
+```
+
+2) Build image (Dockerfile multi-stage, không cần Maven trên host):
+
+```bash
+docker build -t udpt-app:latest .
+```
+
+3) Run container và trỏ tới DB/Redis/Kafka bằng biến môi trường.
+
+Ví dụ `app-1`:
+
+```bash
+docker run -d --name app-1 --restart unless-stopped ^
+  -p 8080:8080 ^
+  -e SPRING_PROFILES_ACTIVE=docker ^
+  -e SPRING_FLYWAY_ENABLED=true ^
+  -e "SPRING_DATASOURCE_URL=jdbc:postgresql://PUBLIC_IP_CRDB_1:26257,PUBLIC_IP_CRDB_2:26257,PUBLIC_IP_CRDB_3:26257/quizdb?sslmode=disable" ^
+  -e SPRING_DATA_REDIS_HOST=PUBLIC_IP_REDIS_1 ^
+  -e SPRING_DATA_REDIS_PORT=6379 ^
+  -e SPRING_KAFKA_BOOTSTRAP_SERVERS=PUBLIC_IP_KAFKA_1:9092 ^
+  -e APP_JWT_SECRET="your-256-bit-secret-here" ^
+  udpt-app:latest
+```
+
+Trên `app-2` và `app-3`, chạy tương tự nhưng đặt:
+
+- `SPRING_FLYWAY_ENABLED=false`
+
+### 7.7 Chạy Nginx public (1 máy)
+
+Trên `nginx-1`:
+
+1) Clone repo để lấy file `nginx/nginx.conf` làm mẫu, sau đó **sửa upstream** trỏ tới 3 app node theo IP public:
+
+Trong `nginx/nginx.conf`, thay:
+
+- `server app1:8080` → `server PUBLIC_IP_APP_1:8080`
+- `server app2:8080` → `server PUBLIC_IP_APP_2:8080`
+- `server app3:8080` → `server PUBLIC_IP_APP_3:8080`
+
+2) Run Nginx:
+
+```bash
+docker run -d --name nginx --restart unless-stopped ^
+  -p 80:80 ^
+  -v "%cd%\\nginx\\nginx.conf:/etc/nginx/nginx.conf:ro" ^
+  nginx:1.25-alpine
+```
+
+Test từ máy bất kỳ:
+
+```bash
+curl -sS http://PUBLIC_IP_NGINX_1/nginx-health
+curl -sS -i http://PUBLIC_IP_NGINX_1/api/quizzes
+```
+
+### 7.8 Chạy frontend để demo public
+
+Có 2 lựa chọn:
+
+- **A) Chạy local (máy cá nhân)** và trỏ API về Nginx public:
+  - Sửa `frontend/vite.config.ts` proxy target thành `http://PUBLIC_IP_NGINX_1`
+- **B) Host frontend lên một static host** (khuyến nghị) và trỏ base API về domain của Nginx (tuỳ cách bạn cấu hình frontend).
+
+
