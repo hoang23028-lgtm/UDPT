@@ -171,19 +171,34 @@ Mục tiêu: chạy đúng mô hình phân tán **nhiều máy**, public ra Inte
   - Nếu buộc phải dùng public IP: cấu hình firewall để **chỉ cho phép IP của các máy app** truy cập port nội bộ.
 - CockroachDB trong `docker-compose.yml` hiện chạy `--insecure`. Với demo public, hãy coi đây là **demo kỹ thuật**, không dùng cho production.
 
-### 7.2 Chuẩn bị hạ tầng (gợi ý tối thiểu)
+### 7.2 Triển khai khi chỉ có 3 máy (khuyến nghị)
 
-Bạn cần tối thiểu 9 VM (hoặc máy vật lý) có IP public:
+Với **3 máy**, mô hình tối thiểu nhưng vẫn “phân tán” hợp lý là:
 
-- `crdb-1`, `crdb-2`, `crdb-3` (CockroachDB)
-- `redis-1` (Redis)
-- `kafka-1` (Redpanda)
-- `app-1`, `app-2`, `app-3` (Spring Boot)
-- `nginx-1` (public entry)
+- **Máy 1 (PUBLIC)**: `nginx` + `app-1` + `redpanda` (Kafka)
+- **Máy 2 (PRIVATE)**: `crdb-1` + `app-2` + `redis`
+- **Máy 3 (PRIVATE)**: `crdb-2` + `crdb-3` + `app-3`
 
-Tất cả máy cài:
+Giải thích nhanh:
 
-- Docker + Docker Compose v2
+- CockroachDB cần **3 node** để chịu lỗi (mất 1 node vẫn còn quorum). Với 3 máy, bạn có thể đặt **2 node DB trên cùng 1 máy** (Máy 3) để đủ 3 node cho demo; đây **không tối ưu HA** nhưng đủ cho mô phỏng “cluster” và failover cơ bản.
+- Redis/Redpanda không nhất thiết phải tách ra máy riêng khi demo; ưu tiên tách khỏi Nginx hoặc DB để tránh “chết cùng nhau”.
+
+Tất cả máy cần cài:
+
+- **Docker** + **Docker Compose v2**
+
+> Nếu bạn có thể mở rộng lên 4–5 máy, mình khuyến nghị tách DB 3 node mỗi máy 1 node, và Redis/Redpanda/Nginx/app tách rời hơn.
+
+### 7.2.1 Ports và firewall (cực quan trọng khi public)
+
+- Public Internet chỉ mở:
+  - **Máy 1**: `80` (và `443` nếu sau này cấu hình TLS)
+- Mở giữa các máy (chỉ allow theo IP của các máy trong cụm):
+  - **CockroachDB**: `26257/tcp` giữa Máy 2 ↔ Máy 3 ↔ Máy 1 (app nodes cần truy cập)
+  - **Redis**: `6379/tcp` từ Máy 1 & 3 → Máy 2
+  - **Redpanda/Kafka**: `9092/tcp` từ Máy 2 & 3 → Máy 1
+  - **App nodes**: `8080/tcp` giữa các máy (ít nhất: Máy 1 Nginx → Máy 1/2/3 app)
 
 ### 7.3 Chạy CockroachDB cluster (3 máy)
 
@@ -203,6 +218,45 @@ docker run -d --name crdb-1 --restart unless-stopped ^
 
 Tương tự cho `crdb-2`, `crdb-3` (đổi `--name` và `--advertise-addr`).
 
+#### Chạy 2 node CockroachDB trên cùng 1 máy (khi chỉ có 3 máy)
+
+Nếu bạn chọn đặt `crdb-2` và `crdb-3` trên **Máy 3**, hãy chạy 2 container với **port host khác nhau**:
+
+Ví dụ trên Máy 3:
+
+`crdb-2`:
+
+```bash
+docker run -d --name crdb-2 --restart unless-stopped ^
+  -p 26258:26257 -p 8082:8080 ^
+  cockroachdb/cockroach:v23.2.5 start --insecure ^
+  --advertise-addr=PUBLIC_IP_MAY_3:26258 ^
+  --http-addr=0.0.0.0:8080 ^
+  --listen-addr=0.0.0.0:26257 ^
+  --join=PUBLIC_IP_MAY_2:26257,PUBLIC_IP_MAY_3:26258,PUBLIC_IP_MAY_3:26259
+```
+
+`crdb-3`:
+
+```bash
+docker run -d --name crdb-3 --restart unless-stopped ^
+  -p 26259:26257 -p 8083:8080 ^
+  cockroachdb/cockroach:v23.2.5 start --insecure ^
+  --advertise-addr=PUBLIC_IP_MAY_3:26259 ^
+  --http-addr=0.0.0.0:8080 ^
+  --listen-addr=0.0.0.0:26257 ^
+  --join=PUBLIC_IP_MAY_2:26257,PUBLIC_IP_MAY_3:26258,PUBLIC_IP_MAY_3:26259
+```
+
+Khi đó, chuỗi JDBC từ app sẽ dùng:
+
+- Máy 2: `PUBLIC_IP_MAY_2:26257`
+- Máy 3: `PUBLIC_IP_MAY_3:26258` và `PUBLIC_IP_MAY_3:26259`
+
+Ví dụ:
+
+`jdbc:postgresql://PUBLIC_IP_MAY_2:26257,PUBLIC_IP_MAY_3:26258,PUBLIC_IP_MAY_3:26259/quizdb?sslmode=disable`
+
 Sau khi 3 node lên, tạo database logical `quizdb` (chạy 1 lần trên bất kỳ node):
 
 ```bash
@@ -211,7 +265,7 @@ docker exec -it crdb-1 cockroach sql --insecure --host=PUBLIC_IP_CRDB_1:26257 -e
 
 ### 7.4 Chạy Redis (1 máy)
 
-Trên `redis-1`:
+Với mô hình 3 máy (mục 7.2), chạy Redis trên **Máy 2**:
 
 ```bash
 docker run -d --name redis --restart unless-stopped ^
@@ -221,7 +275,7 @@ docker run -d --name redis --restart unless-stopped ^
 
 ### 7.5 Chạy Redpanda/Kafka (1 máy)
 
-Trên `kafka-1`:
+Với mô hình 3 máy (mục 7.2), chạy Redpanda trên **Máy 1**:
 
 ```bash
 docker run -d --name redpanda --restart unless-stopped ^
@@ -234,7 +288,13 @@ docker run -d --name redpanda --restart unless-stopped ^
 
 ### 7.6 Chạy 3 app nodes (3 máy)
 
-Trên mỗi máy `app-1/app-2/app-3`:
+Với mô hình 3 máy (mục 7.2), chạy:
+
+- **Máy 1**: `app-1`
+- **Máy 2**: `app-2`
+- **Máy 3**: `app-3`
+
+Trên mỗi máy:
 
 1) Clone code:
 
@@ -251,17 +311,17 @@ docker build -t udpt-app:latest .
 
 3) Run container và trỏ tới DB/Redis/Kafka bằng biến môi trường.
 
-Ví dụ `app-1`:
+Ví dụ `app-1` (Máy 1):
 
 ```bash
 docker run -d --name app-1 --restart unless-stopped ^
   -p 8080:8080 ^
   -e SPRING_PROFILES_ACTIVE=docker ^
   -e SPRING_FLYWAY_ENABLED=true ^
-  -e "SPRING_DATASOURCE_URL=jdbc:postgresql://PUBLIC_IP_CRDB_1:26257,PUBLIC_IP_CRDB_2:26257,PUBLIC_IP_CRDB_3:26257/quizdb?sslmode=disable" ^
-  -e SPRING_DATA_REDIS_HOST=PUBLIC_IP_REDIS_1 ^
+  -e "SPRING_DATASOURCE_URL=jdbc:postgresql://PUBLIC_IP_MAY_2:26257,PUBLIC_IP_MAY_3:26258,PUBLIC_IP_MAY_3:26259/quizdb?sslmode=disable" ^
+  -e SPRING_DATA_REDIS_HOST=PUBLIC_IP_MAY_2 ^
   -e SPRING_DATA_REDIS_PORT=6379 ^
-  -e SPRING_KAFKA_BOOTSTRAP_SERVERS=PUBLIC_IP_KAFKA_1:9092 ^
+  -e SPRING_KAFKA_BOOTSTRAP_SERVERS=PUBLIC_IP_MAY_1:9092 ^
   -e APP_JWT_SECRET="your-256-bit-secret-here" ^
   udpt-app:latest
 ```
@@ -272,15 +332,15 @@ Trên `app-2` và `app-3`, chạy tương tự nhưng đặt:
 
 ### 7.7 Chạy Nginx public (1 máy)
 
-Trên `nginx-1`:
+Với mô hình 3 máy (mục 7.2), chạy Nginx trên **Máy 1**:
 
 1) Clone repo để lấy file `nginx/nginx.conf` làm mẫu, sau đó **sửa upstream** trỏ tới 3 app node theo IP public:
 
 Trong `nginx/nginx.conf`, thay:
 
-- `server app1:8080` → `server PUBLIC_IP_APP_1:8080`
-- `server app2:8080` → `server PUBLIC_IP_APP_2:8080`
-- `server app3:8080` → `server PUBLIC_IP_APP_3:8080`
+- `server app1:8080` → `server 127.0.0.1:8080` (vì `app-1` cùng máy với Nginx)
+- `server app2:8080` → `server PUBLIC_IP_MAY_2:8080`
+- `server app3:8080` → `server PUBLIC_IP_MAY_3:8080`
 
 2) Run Nginx:
 
