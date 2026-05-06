@@ -366,4 +366,14 @@ Có 2 lựa chọn:
   - Sửa `frontend/vite.config.ts` proxy target thành `http://PUBLIC_IP_NGINX_1`
 - **B) Host frontend lên một static host** (khuyến nghị) và trỏ base API về domain của Nginx (tuỳ cách bạn cấu hình frontend).
 
+## 8) 3 máy Windows, 3 mạng khác nhau: dùng Tailscale
+
+Khi mỗi máy ở một Wi‑Fi/nhà khác nhau, IP LAN (`192.168.x.x`) **không** dùng để nối trực tiếp giữa các máy. Cách thực tế là cài **[Tailscale](https://tailscale.com/download)** trên cả 3 máy, lấy IP dạng `100.x.x.x`, rồi thay mọi chỗ ghi `PUBLIC_IP_MAY_*` trong mục 7 bằng **IP Tailscale** tương ứng:
+
+- `PUBLIC_IP_MAY_1` → IP Tailscale **Máy 1** (Nginx + app-1 + Kafka)
+- `PUBLIC_IP_MAY_2` → IP Tailscale **Máy 2** (crdb-1 + app-2 + Redis)
+- `PUBLIC_IP_MAY_3` → IP Tailscale **Máy 3** (crdb-2 + crdb-3 + app-3)
+
+Hướng dẫn đầy đủ (PowerShell, `docker run`, sửa `nginx.conf`): **[TAILSCALE_WINDOWS_3_MAY.md](TAILSCALE_WINDOWS_3_MAY.md)**.
+
 
