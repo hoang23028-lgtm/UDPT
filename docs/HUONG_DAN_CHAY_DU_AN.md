@@ -376,4 +376,170 @@ Khi mỗi máy ở một Wi‑Fi/nhà khác nhau, IP LAN (`192.168.x.x`) **khôn
 
 Hướng dẫn đầy đủ (PowerShell, `docker run`, sửa `nginx.conf`): **[TAILSCALE_WINDOWS_3_MAY.md](TAILSCALE_WINDOWS_3_MAY.md)**.
 
+## 9) (Tailscale) Chạy lại nhanh sau khi đã setup xong (2 máy Windows)
+
+Phần này dành cho trường hợp bạn đã chạy được mô hình 2 máy rồi (các container vẫn còn), chỉ **tắt máy / tắt Docker Desktop / stop container** và muốn bật lại.
+
+Giả sử role (như demo trong chat):
+
+- **Máy 1 (TS1)**: `crdb-1`, `redpanda`, `app-1`, `nginx`, (tuỳ chọn) `frontend`
+- **Máy 2 (TS2)**: `crdb-2`, `crdb-3`, `redis`, `app-2`
+
+### 9.1 Thứ tự bật lại (khuyến nghị)
+
+#### Máy 2: bật DB + Redis + app-2
+
+```bash
+docker start crdb-2 crdb-3 redis app-2
+docker ps
+```
+
+#### Máy 1: bật DB + Kafka + app-1 + Nginx
+
+```bash
+docker start crdb-1 redpanda app-1 nginx
+docker ps
+```
+
+### 9.2 Kiểm tra nhanh (Máy 1)
+
+```bash
+docker exec -it crdb-1 cockroach node status --insecure --host=127.0.0.1:26257
+curl -sS -i http://localhost/api/quizzes
+```
+
+### 9.3 Frontend (Vite)
+
+#### Chạy frontend trên Máy 1 (API ở cùng máy với Nginx)
+
+```bash
+cd frontend
+npm install
+npm run dev -- --host 0.0.0.0
+```
+
+#### Chạy frontend trên Máy 2 (proxy `/api` về Nginx ở Máy 1)
+
+Trên Máy 2, set biến môi trường trước khi chạy dev server:
+
+```bash
+set VITE_API_TARGET=http://<TS1_IP>
+```
+
+Ví dụ:
+
+```bash
+set VITE_API_TARGET=http://100.87.131.72
+```
+
+Sau đó chạy:
+
+```bash
+cd frontend
+npm install
+npm run dev -- --host 0.0.0.0
+```
+
+> Ghi chú: `frontend/vite.config.ts` dùng `process.env.VITE_API_TARGET` để quyết định proxy `/api`. Nếu không set, mặc định proxy về `http://localhost` (chỉ đúng khi frontend chạy trên cùng máy với Nginx).
+
+### 9.4 Lưu ý quan trọng khi chạy nhiều app node
+
+- **Flyway**: chỉ nên bật trên **1 node** (ví dụ `app-1`), các node còn lại đặt `SPRING_FLYWAY_ENABLED=false` để tránh kẹt lock.
+- **JWT secret**: `APP_JWT_SECRET` phải **>= 32 ký tự** và **giống nhau** trên mọi app node.
+
+### 9.5 Tạo tài khoản ADMIN (bootstrap nhanh)
+
+Nếu bạn chưa có “admin đầu tiên”, cách nhanh nhất là promote 1 user trong DB:
+
+1) Xem user đang có:
+
+```bash
+docker exec -it crdb-1 cockroach sql --insecure --host=127.0.0.1:26257 --database=quizdb -e "SELECT id, email, role FROM app_users ORDER BY id;"
+```
+
+2) Promote lên ADMIN:
+
+```bash
+docker exec -it crdb-1 cockroach sql --insecure --host=127.0.0.1:26257 --database=quizdb -e "UPDATE app_users SET role='ADMIN' WHERE email='your@email.com';"
+```
+
+Sau đó logout/login lại tài khoản đó để nhận quyền.
+
+## 10) (Tailscale) Kịch bản demo “phân tán” cho giảng viên (chỉ 2 máy)
+
+> Mục tiêu của demo: chứng minh hệ **có nhiều node** và **chịu lỗi** (fault tolerance), đồng thời dữ liệu là **shared state** thông qua **CockroachDB cluster** (quorum/replication).
+
+### 10.1 Bạn đang “phân tán” cái gì?
+
+- **API nhiều replica**: `app-1` (Máy 1) + `app-2` (Máy 2), đứng sau **Nginx load balancer**.
+- **DB phân tán thực sự**: CockroachDB **3 node** (1 node ở Máy 1, 2 node ở Máy 2) ⇒ có **quorum / leader election / replication**.
+- **Tách tầng**: Redis + Kafka/Redpanda chạy riêng (khác tiến trình/khác máy) để minh hoạ kiến trúc distributed.
+
+> Lưu ý: do giới hạn phần cứng, 2 node DB đặt trên cùng 1 máy để mô phỏng quorum. Về HA vật lý “chuẩn”, mỗi node DB nên chạy trên 1 máy khác nhau.
+
+### 10.2 Demo “shared state” (kết quả thấy trên máy khác)
+
+- Trên **Máy 2**: đăng nhập user → làm bài → submit.
+- Trên **Máy 1**: mở leaderboard / submissions (tuỳ UI) để thấy kết quả cập nhật.
+
+Giải thích: submit ở Máy 2 nhưng kết quả hiện ở Máy 1 vì **cùng đọc/ghi trên CockroachDB cluster** (không phải lưu local trên 1 máy).
+
+### 10.3 Demo “load balancing” qua Nginx
+
+Trên **Máy 1** (gọi qua Nginx):
+
+```bash
+curl -sS -i http://localhost/api/quizzes
+```
+
+Nói rõ: request đi qua Nginx và được phân phối tới các node `app-*` ở 2 máy.
+
+### 10.4 Demo “chịu lỗi” (fault tolerance)
+
+#### A) Tắt 1 backend node (app-2) nhưng hệ vẫn chạy
+
+Trên **Máy 2**:
+
+```bash
+docker stop app-2
+```
+
+Trên **Máy 1**:
+
+```bash
+curl -sS -i http://localhost/api/quizzes
+```
+
+Kỳ vọng: vẫn **200** (Nginx failover sang `app-1`).
+
+Khôi phục:
+
+```bash
+docker start app-2
+```
+
+#### B) Tắt 1 DB node nhưng hệ vẫn chạy (quorum còn)
+
+Trên **Máy 2** (chỉ tắt 1 node DB):
+
+```bash
+docker stop crdb-3
+```
+
+Trên **Máy 1**:
+
+```bash
+docker exec -it crdb-1 cockroach node status --insecure --host=127.0.0.1:26257
+```
+
+Giải thích: cluster vẫn hoạt động vì còn **2/3 node** ⇒ còn quorum.
+
+Khôi phục:
+
+```bash
+docker start crdb-3
+```
+
+> Cảnh báo: **không tắt đồng thời `crdb-2` và `crdb-3`** vì sẽ mất quorum (cluster unavailable).
+
 
